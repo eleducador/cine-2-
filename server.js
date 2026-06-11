@@ -69,7 +69,9 @@ const DEFAULT_STATE = {
   scans: []
 };
 
-// ── Connect to MongoDB ────────────────────────
+// Initialize local memory fallback globally
+global.localMemoryDB = JSON.parse(JSON.stringify(DEFAULT_STATE));
+
 if (MONGODB_URI) {
   mongoose.connect(MONGODB_URI)
     .then(() => console.log('✅ Conectado a MongoDB'))
@@ -77,13 +79,13 @@ if (MONGODB_URI) {
 } else {
   console.log('⚠️ ADVERTENCIA: No se ha configurado MONGODB_URI.');
   console.log('   Si estás probando localmente, los datos se reiniciarán al cerrar el servidor.');
-  // Emulate local memory if no URI is provided (just for testing)
-  let localMemoryDB = JSON.parse(JSON.stringify(DEFAULT_STATE));
 }
 
 // ── DB helpers ────────────────────────────────
 async function loadDB() {
-  if (!MONGODB_URI) return global.localMemoryDB || JSON.parse(JSON.stringify(DEFAULT_STATE));
+  if (!MONGODB_URI || mongoose.connection.readyState !== 1) {
+    return global.localMemoryDB || JSON.parse(JSON.stringify(DEFAULT_STATE));
+  }
 
   try {
     let stateDoc = await State.findOne({ id: 'main' });
@@ -92,17 +94,22 @@ async function loadDB() {
       await stateDoc.save();
     }
     const doc = stateDoc.toObject();
+    
+    // Sincronizar memoria local por si la conexión se cae luego
+    global.localMemoryDB = JSON.parse(JSON.stringify(doc));
     return doc;
   } catch (e) {
     console.error('Error loading DB:', e.message);
-    return JSON.parse(JSON.stringify(DEFAULT_STATE));
+    return global.localMemoryDB || JSON.parse(JSON.stringify(DEFAULT_STATE));
   }
 }
 
 async function saveDB(stateObj) {
-  if (!MONGODB_URI) {
-    global.localMemoryDB = JSON.parse(JSON.stringify(stateObj));
-    return;
+  // Always update local memory as a fallback
+  global.localMemoryDB = JSON.parse(JSON.stringify(stateObj));
+
+  if (!MONGODB_URI || mongoose.connection.readyState !== 1) {
+    return; // Si no hay BD o no está conectada, solo guardamos en memoria local
   }
 
   try {
@@ -114,6 +121,7 @@ async function saveDB(stateObj) {
       doc.config = stateObj.config;
       doc.boletos = stateObj.boletos;
       doc.scans = stateObj.scans;
+      doc.admins = stateObj.admins;
       
       // Force Mongoose to recognize changes in nested objects
       doc.markModified('config');
